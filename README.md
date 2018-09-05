@@ -10,6 +10,14 @@ To train, download the training data from https://drive.google.com/file/d/1x1Xz3
 
 There is also a demo script (run demo.sh) that will generate paraphrases from a set of templates (check the script to see available choices).
 
+To run your own sentences through the pretrained model, first parse them using Stanford CoreNLP. We used CoreNLP version 3.7.0 for the results in the paper, along with the Shift-Reduce Parser models (https://nlp.stanford.edu/software/stanford-srparser-2014-10-23-models.jar). More concretely, the command we ran to parse the ParaNMT dataset used in our paper is:
+
+```
+java -Xmx12g -cp "*" edu.stanford.nlp.pipeline.StanfordCoreNLP -threads 1 -annotators tokenize,ssplit,pos,parse -ssplit.eolonly -filelist filenames.txt -outputFormat text -parse.model edu/stanford/nlp/models/srparser/englishSR.ser.gz -outputDirectory /outputdir/
+```
+
+After parsing, run the extract_parses function in read_paranmt_parses.py and write the results to a CSV. There are also some alternate parse labeling functions in read_paranmt_parses.py if you are interested in exploring them. We plan to clean up the code in this file in the future :)
+
 If you use our code or models for your work please cite:
 
 @inproceedings{iyyer-2018-controlled, author = {Iyyer, Mohit and Wieting, John and Gimpel, Kevin and Zettlemoyer, Luke}, title = {Adversarial Example Generation with Syntactically Controlled Paraphrase Networks}, booktitle={Proceedings of NAACL}, year = {2018} }
