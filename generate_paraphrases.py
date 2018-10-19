@@ -118,22 +118,22 @@ if __name__ == '__main__':
     ## paraphrase model args
     parser.add_argument('--gpu', type=str, default='0',
             help='GPU id')
-    parser.add_argument('--out_file', type=str, default='scpn_ex.out',
+    parser.add_argument('--out_file', type=str, default='/home/zhengliz/Output/scpn/scpn_ex.out',
             help='paraphrase save path')
-    parser.add_argument('--parsed_input_file', type=str, default='data/scpn_ex.tsv',
+    parser.add_argument('--parsed_input_file', type=str, default='/home/zhengliz/Output/scpn/data/scpn_ex.tsv',
             help='parse load path')
-    parser.add_argument('--vocab', type=str, default='data/parse_vocab.pkl',
+    parser.add_argument('--vocab', type=str, default='/home/zhengliz/Output/scpn/data/parse_vocab.pkl',
             help='word vocabulary')
-    parser.add_argument('--parse_vocab', type=str, default='data/ptb_tagset.txt',
+    parser.add_argument('--parse_vocab', type=str, default='/home/zhengliz/Output/scpn/data/ptb_tagset.txt',
             help='tag vocabulary')
-    parser.add_argument('--pp_model', type=str, default='models/scpn.pt',
+    parser.add_argument('--pp_model', type=str, default='/home/zhengliz/Output/scpn/models/scpn.pt',
             help='paraphrase model to load')
-    parser.add_argument('--parse_model', type=str, default='models/parse_generator.pt',
+    parser.add_argument('--parse_model', type=str, default='/home/zhengliz/Output/scpn/models/parse_generator.pt',
             help='model save path')
 
     ## BPE args
-    parser.add_argument('--bpe_codes', type=str, default='data/bpe.codes')
-    parser.add_argument('--bpe_vocab', type=str, default='data/vocab.txt')
+    parser.add_argument('--bpe_codes', type=str, default='/home/zhengliz/Output/scpn/data/bpe.codes')
+    parser.add_argument('--bpe_vocab', type=str, default='/home/zhengliz/Output/scpn/data/vocab.txt')
     parser.add_argument('--bpe_vocab_thresh', type=int, default=50)
 
     args = parser.parse_args()

@@ -344,11 +344,11 @@ if __name__ == '__main__':
 
     # write fieldnames
     fn = ['tokens', 'parse']
-    ofile = codecs.open('data/parsed_paranmt.csv', 'w', 'utf-8')
+    ofile = codecs.open('/home/zhengliz/Output/scpn/data/parsed_paranmt.csv', 'w', 'utf-8')
     out = csv.DictWriter(ofile, delimiter='\t', fieldnames=fn)
     out.writerow(dict((x,x) for x in fn))
 
-    parses = extract_parses('data/paranmt_dev_parses.txt')
+    parses = extract_parses('/home/zhengliz/Output/scpn/data/paranmt_dev_parses.txt')
     print len(parses)
     write_parses(parses, out)
 

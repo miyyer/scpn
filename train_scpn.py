@@ -480,13 +480,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Syntactically Controlled Paraphrase Network')
     parser.add_argument('--gpu', type=str, default='0',
             help='GPU id')
-    parser.add_argument('--data', type=str, default='data/parsed_data.h5',
+    parser.add_argument('--data', type=str, default='/home/zhengliz/Output/scpn/data/parsed_data.h5',
             help='hdf5 location')
-    parser.add_argument('--vocab', type=str, default='data/parse_vocab.pkl',
+    parser.add_argument('--vocab', type=str, default='/home/zhengliz/Output/scpn/data/parse_vocab.pkl',
             help='word vocabulary')
-    parser.add_argument('--parse_vocab', type=str, default='data/ptb_tagset.txt',
+    parser.add_argument('--parse_vocab', type=str, default='/home/zhengliz/Output/scpn/data/ptb_tagset.txt',
             help='tag vocabulary')
-    parser.add_argument('--model', type=str, default='scpn2.pt',
+    parser.add_argument('--model', type=str, default='/home/zhengliz/Output/scpn/models/scpn2.pt',
             help='model save path')
     parser.add_argument('--batch_size', type=int, default=64,
             help='batch size')
@@ -539,7 +539,7 @@ if __name__ == '__main__':
     n_epochs = args.n_epochs
     lr = args.lr
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
-    out_file = 'models/' + args.model
+    out_file = args.model
 
     # set random seed
     torch.manual_seed(args.seed)
