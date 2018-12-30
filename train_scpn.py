@@ -565,6 +565,8 @@ if __name__ == '__main__':
         line = line.strip()
         if line != 'EOP':
             label_voc[line] = idx
+    # TODO: double check the modification here
+    label_voc['EOP'] = len(label_voc)
     rev_label_voc = dict((v,k) for (k,v) in label_voc.iteritems()) 
 
     len_voc = len(vocab)
@@ -659,7 +661,7 @@ if __name__ == '__main__':
             # torchify input
             curr_inp = Variable(torch.from_numpy(inp_np.astype('int32')).long().cuda())
             curr_out = Variable(torch.from_numpy(out_np.astype('int32')).long().cuda())
-            in_trans = Variable(torch.from_numpy(in_trans_np).long(98).cuda())
+            in_trans = Variable(torch.from_numpy(in_trans_np).long().cuda())
             out_trans = Variable(torch.from_numpy(out_trans_np).long().cuda())
             in_sent_lens = torch.from_numpy(in_len_np).long().cuda()
             out_sent_lens = torch.from_numpy(out_len_np).long().cuda()
