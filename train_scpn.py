@@ -1,4 +1,3 @@
-
 import torch, time, argparse, os, codecs, h5py, cPickle, random
 import numpy as np
 from torch import nn
@@ -15,54 +14,55 @@ sys.setdefaultencoding('utf8')
 # transformation embeddings concatenated with decoder word inputs
 # attention conditioned on transformation via bilinear product
 class SCPN(nn.Module):
-    def __init__(self, d_word, d_hid, d_nt, d_trans, 
-        len_voc, len_trans_voc, use_input_parse):
+    def __init__(self, args, len_voc, len_parse_voc):
 
         super(SCPN, self).__init__()
-        self.d_word = d_word
-        self.d_hid = d_hid
-        self.d_trans = d_trans
-        self.d_nt = d_nt + 1
+        self.d_word = args.d_word
+        self.d_hid = args.d_hid
+        self.d_trans = args.d_trans
+        self.d_nt = args.d_nt + 1
         self.len_voc = len_voc
-        self.len_trans_voc = len_trans_voc
-        self.use_input_parse = use_input_parse
+        self.len_trans_voc = len_parse_voc
+        self.use_input_parse = args.use_input_parse
+        self.coverage = args.coverage
+        self.cov_loss_wt = args.cov_loss_wt
 
         # embeddings
-        self.word_embs = nn.Embedding(len_voc, d_word)
-        self.trans_embs = nn.Embedding(len_trans_voc, d_nt)
+        self.word_embs = nn.Embedding(self.len_voc, self.d_word)
+        self.trans_embs = nn.Embedding(self.len_trans_voc, self.d_nt)
 
         # lstms
-        if use_input_parse:
-            self.encoder = nn.LSTM(d_word + d_trans, d_hid, num_layers=1, bidirectional=True, batch_first=True)
+        if self.use_input_parse:
+            self.encoder = nn.LSTM(self.d_word + self.d_trans, self.d_hid, num_layers=1, bidirectional=True, batch_first=True)
         else:
-            self.encoder = nn.LSTM(d_word, d_hid, num_layers=1, bidirectional=True, batch_first=True)
+            self.encoder = nn.LSTM(self.d_word, self.d_hid, num_layers=1, bidirectional=True, batch_first=True)
 
-        self.encoder_proj = nn.Linear(d_hid * 2, d_hid)
-        self.decoder = nn.LSTM(d_word + d_hid, d_hid, num_layers=2, batch_first=True)
-        self.trans_encoder = nn.LSTM(d_nt, d_trans, num_layers=1, bidirectional=True, batch_first=True)
-        self.trans_hid_init = Variable(torch.zeros(2, 1, d_trans).cuda())
-        self.trans_cell_init = Variable(torch.zeros(2, 1, d_trans).cuda())
-        self.e_hid_init = Variable(torch.zeros(2, 1, d_hid).cuda())
-        self.e_cell_init = Variable(torch.zeros(2, 1, d_hid).cuda())
-        self.d_cell_init = Variable(torch.zeros(2, 1, d_hid).cuda())
+        self.encoder_proj = nn.Linear(self.d_hid * 2, self.d_hid)
+        self.decoder = nn.LSTM(self.d_word + self.d_hid, self.d_hid, num_layers=2, batch_first=True)
+        self.trans_encoder = nn.LSTM(self.d_nt, self.d_trans, num_layers=1, bidirectional=True, batch_first=True)
+        self.trans_hid_init = Variable(torch.zeros(2, 1, self.d_trans).cuda())
+        self.trans_cell_init = Variable(torch.zeros(2, 1, self.d_trans).cuda())
+        self.e_hid_init = Variable(torch.zeros(2, 1, self.d_hid).cuda())
+        self.e_cell_init = Variable(torch.zeros(2, 1, self.d_hid).cuda())
+        self.d_cell_init = Variable(torch.zeros(2, 1, self.d_hid).cuda())
 
         # output softmax
-        self.out_dense_1 = nn.Linear(d_hid * 2, d_hid)
-        self.out_dense_2 = nn.Linear(d_hid, len_voc)
+        self.out_dense_1 = nn.Linear(self.d_hid * 2, self.d_hid)
+        self.out_dense_2 = nn.Linear(self.d_hid, self.len_voc)
         self.att_nonlin = nn.Softmax()
         self.out_nonlin = nn.LogSoftmax()
 
         # attention params
-        self.att_parse_proj = nn.Linear(d_trans * 2, d_hid)
-        self.att_W = nn.Parameter(torch.Tensor(d_hid, d_hid).cuda())
-        self.att_parse_W = nn.Parameter(torch.Tensor(d_hid, d_hid).cuda())
+        self.att_parse_proj = nn.Linear(self.d_trans * 2, self.d_hid)
+        self.att_W = nn.Parameter(torch.Tensor(self.d_hid, self.d_hid).cuda())
+        self.att_parse_W = nn.Parameter(torch.Tensor(self.d_hid, self.d_hid).cuda())
         nn.init.xavier_uniform(self.att_parse_W.data)
         nn.init.xavier_uniform(self.att_W.data)
 
         # copy prob params
-        self.copy_hid_v = nn.Parameter(torch.Tensor(d_hid, 1).cuda())
-        self.copy_att_v = nn.Parameter(torch.Tensor(d_hid, 1).cuda())
-        self.copy_inp_v = nn.Parameter(torch.Tensor(d_word + d_hid, 1).cuda())
+        self.copy_hid_v = nn.Parameter(torch.Tensor(self.d_hid, 1).cuda())
+        self.copy_att_v = nn.Parameter(torch.Tensor(self.d_hid, 1).cuda())
+        self.copy_inp_v = nn.Parameter(torch.Tensor(self.d_word + self.d_hid, 1).cuda())
         nn.init.xavier_uniform(self.copy_hid_v.data)
         nn.init.xavier_uniform(self.copy_att_v.data)
         nn.init.xavier_uniform(self.copy_inp_v.data)
@@ -530,6 +530,10 @@ if __name__ == '__main__':
             help='whether or not to use the input parse')
     parser.add_argument('--dev_batches', type=int, default=200,
             help='how many minibatches to use for validation')
+    parser.add_argument('--coverage', type=bool, default=False,
+                        help='whether to use coverage mechanism')
+    parser.add_argument('--cov_loss_wt', type=float, default=1.0,
+                        help='weight of coverage loss (lambda in the paper)')
 
     args = parser.parse_args()
 
@@ -582,8 +586,7 @@ if __name__ == '__main__':
     dev_minibatches = minibatches[:args.dev_batches]
 
     # build network
-    net = SCPN(d_word, d_hid, d_nt, d_trans,
-        len_voc, len_parse_voc, args.use_input_parse)
+    net = SCPN(args, len_voc, len_parse_voc)
     net.cuda()
 
     # load saved model if evaluating
@@ -741,4 +744,3 @@ if __name__ == '__main__':
         for param_group in optimizer.param_groups:
             param_group['lr'] = param_group['lr'] * args.lr_decay_factor
             print 'new LR:', param_group['lr']
-
