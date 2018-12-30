@@ -39,9 +39,9 @@ class SCPN(nn.Module):
 
         self.encoder_proj = nn.Linear(d_hid * 2, d_hid)
         self.decoder = nn.LSTM(d_word + d_hid, d_hid, num_layers=2, batch_first=True)
-        self.trans_encoder = nn.LSTM(d_nt, d_trans, num_layers=1, batch_first=True)
-        self.trans_hid_init = Variable(torch.zeros(1, 1, d_trans).cuda())
-        self.trans_cell_init = Variable(torch.zeros(1, 1, d_trans).cuda())
+        self.trans_encoder = nn.LSTM(d_nt, d_trans, num_layers=1, bidirectional=True, batch_first=True)
+        self.trans_hid_init = Variable(torch.zeros(2, 1, d_trans).cuda())
+        self.trans_cell_init = Variable(torch.zeros(2, 1, d_trans).cuda())
         self.e_hid_init = Variable(torch.zeros(2, 1, d_hid).cuda())
         self.e_cell_init = Variable(torch.zeros(2, 1, d_hid).cuda())
         self.d_cell_init = Variable(torch.zeros(2, 1, d_hid).cuda())
@@ -53,7 +53,7 @@ class SCPN(nn.Module):
         self.out_nonlin = nn.LogSoftmax()
 
         # attention params
-        self.att_parse_proj = nn.Linear(d_trans, d_hid)
+        self.att_parse_proj = nn.Linear(d_trans * 2, d_hid)
         self.att_W = nn.Parameter(torch.Tensor(d_hid, d_hid).cuda())
         self.att_parse_W = nn.Parameter(torch.Tensor(d_hid, d_hid).cuda())
         nn.init.xavier_uniform(self.att_parse_W.data)
@@ -122,6 +122,7 @@ class SCPN(nn.Module):
         all_hids, (enc_last_hid, _) = self.encoder(pack(in_embs[indices], 
                     lens.tolist(), batch_first=True), (e_hid_init, e_cell_init))
         _, _indices = torch.sort(indices, 0)
+
         all_hids = unpack(all_hids, batch_first=True)[0][_indices]
         all_hids = self.encoder_proj(all_hids.view(-1, self.d_hid * 2)).view(bsz, max_len, self.d_hid)
         
@@ -134,21 +135,22 @@ class SCPN(nn.Module):
     # return encoding for an input batch
     def encode_transformations(self, trans, lengths, return_last=True):
 
-        bsz, _ = trans.size()
+        bsz, max_len = trans.size()
 
         lens, indices = torch.sort(lengths, 0, True)
         in_embs = self.trans_embs(trans)
-        t_hid_init = self.trans_hid_init.expand(1, bsz, self.d_trans).contiguous()
-        t_cell_init = self.trans_cell_init.expand(1, bsz, self.d_trans).contiguous()
+        t_hid_init = self.trans_hid_init.expand(2, bsz, self.d_trans).contiguous()
+        t_cell_init = self.trans_cell_init.expand(2, bsz, self.d_trans).contiguous()
         all_hids, (enc_last_hid, _) = self.trans_encoder(pack(in_embs[indices], 
             lens.tolist(), batch_first=True), (t_hid_init, t_cell_init))
         _, _indices = torch.sort(indices, 0)
 
         if return_last:
-            return enc_last_hid.squeeze(0)[_indices]
+            enc_last_hid = torch.cat([enc_last_hid[0], enc_last_hid[1]], 1)
+            return enc_last_hid[_indices]
         else:
-            all_hids = unpack(all_hids, batch_first=True)[0]
-            return all_hids[_indices]
+            all_hids = unpack(all_hids, batch_first=True)[0][_indices]
+            return all_hids.view(bsz, -1, self.d_trans * 2)
 
 
     # decode one timestep
