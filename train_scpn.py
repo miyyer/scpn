@@ -10,6 +10,7 @@ from scpn_utils import *
 reload(sys)
 sys.setdefaultencoding('utf8')
 
+
 # seq2seq w/ decoder attention
 # transformation embeddings concatenated with decoder word inputs
 # attention conditioned on transformation via bilinear product
@@ -67,6 +68,13 @@ class SCPN(nn.Module):
         nn.init.xavier_uniform(self.copy_att_v.data)
         nn.init.xavier_uniform(self.copy_inp_v.data)
 
+        # coverage params
+        self.cov_proj, self.cov_nonlin, self.cov_W = None, None, None
+        if self.coverage:
+            self.cov_proj = nn.Linear(1, self.d_hid)
+            self.cov_nonlin = nn.Tanh()
+            self.cov_W = nn.Parameter(torch.Tensor(self.d_hid, 1).cuda())
+            nn.init.xavier_uniform(self.cov_W.data)
 
     # create matrix mask from length vector
     def compute_mask(self, lengths):
@@ -76,7 +84,6 @@ class SCPN(nn.Module):
         mask = range_row < mask
         return Variable(mask.float().cuda())
 
-
     # masked softmax for attention
     def masked_softmax(self, vector, mask):
         result = torch.nn.functional.softmax(vector)
@@ -84,16 +91,23 @@ class SCPN(nn.Module):
         result = result / (result.sum(dim=1, keepdim=True) + 1e-13)
         return result
 
-
     # compute masked attention over enc hiddens with bilinear product
-    def compute_decoder_attention(self, hid_previous, enc_hids, in_lens):
+    def compute_decoder_attention(self, hid_previous, enc_hids, in_lens, cov_previous=None):
         mask = self.compute_mask(in_lens)
         b_hn = hid_previous.mm(self.att_W)
         scores = b_hn[:, None, :] * enc_hids
         scores = torch.sum(scores, 2)
+
+        if self.coverage:
+            cov = cov_previous.unsqueeze(2)
+            cov = self.cov_proj(cov)
+            cov = self.cov_nonlin(cov)
+            d0, d1, d2 = cov.size()
+            cov = cov.view(d0*d1, d2).mm(self.cov_W).view(d0, d1)
+            scores = scores + cov
+
         scores = self.masked_softmax(scores, mask)
         return scores
-
 
     # compute masked attention over parse sequence with bilinear product
     def compute_transformation_attention(self, hid_previous, trans_embs, trans_lens):
@@ -104,7 +118,6 @@ class SCPN(nn.Module):
         scores = torch.sum(scores, 2)
         scores = self.masked_softmax(scores, mask)
         return scores
-
 
     # return encoding for an input batch
     def encode_batch(self, inputs, trans, lengths):
@@ -131,7 +144,6 @@ class SCPN(nn.Module):
 
         return all_hids, enc_last_hid
 
-
     # return encoding for an input batch
     def encode_transformations(self, trans, lengths, return_last=True):
 
@@ -152,10 +164,9 @@ class SCPN(nn.Module):
             all_hids = unpack(all_hids, batch_first=True)[0][_indices]
             return all_hids.view(bsz, -1, self.d_trans * 2)
 
-
     # decode one timestep
     def decode_step(self, idx, prev_words, prev_hid, prev_cell, 
-        enc_hids, trans_embs, in_sent_lens, trans_lens, bsz, max_len):
+        enc_hids, trans_embs, in_sent_lens, trans_lens, bsz, max_len, cov_previous=None):
 
         # initialize with zeros
         if idx == 0:
@@ -175,10 +186,14 @@ class SCPN(nn.Module):
         _, (hn, cn) = self.decoder(decoder_input, (prev_hid, prev_cell))
 
         # compute attention for next time step and att weighted ave of encoder hiddens
-        attn_weights = self.compute_decoder_attention(hn[1], enc_hids, in_sent_lens)
+        if self.coverage:
+            attn_weights = self.compute_decoder_attention(hn[1], enc_hids, in_sent_lens,
+                                                          cov_previous)
+        else:
+            attn_weights = self.compute_decoder_attention(hn[1], enc_hids, in_sent_lens)
         attn_ctx = torch.sum(attn_weights[:, :, None] * enc_hids, 1)   
 
-        # compute copy prob as function of lotsa shit
+        # compute copy prob
         p_copy = decoder_input.squeeze(1).mm(self.copy_inp_v)
         p_copy += attn_ctx.mm(self.copy_att_v)
         p_copy += hn[1].mm(self.copy_hid_v)
@@ -186,11 +201,13 @@ class SCPN(nn.Module):
 
         return hn, cn, attn_weights, attn_ctx, p_copy
 
-
     def forward(self, inputs, outputs, in_trans, out_trans, 
         in_sent_lens, out_sent_lens, in_trans_lens, out_trans_lens, max_decode):
 
         bsz, max_len = inputs.size()
+
+        cov_previous = Variable(torch.zeros(bsz, max_len).cuda())
+        coverages, attentions = [], []
 
         # encode transformations
         in_trans_hids = None
@@ -220,8 +237,16 @@ class SCPN(nn.Module):
                 prev_words = outputs[:, idx - 1]
 
             # concat prev word emb and trans emb and feed to decoder lstm
-            hn, cn, attn_weights, attn_ctx, p_copy = self.decode_step(idx, prev_words, 
-                hn, cn, enc_hids, out_trans_hids, in_sent_lens, out_trans_lens, bsz, max_len)
+            if self.coverage:
+                hn, cn, attn_weights, attn_ctx, p_copy = self.decode_step(idx, prev_words,
+                    hn, cn, enc_hids, out_trans_hids, in_sent_lens, out_trans_lens, bsz, max_len,
+                    cov_previous)
+                coverages.append(cov_previous)
+                attentions.append(attn_weights)
+                cov_previous = cov_previous + attn_weights
+            else:
+                hn, cn, attn_weights, attn_ctx, p_copy = self.decode_step(idx, prev_words,
+                    hn, cn, enc_hids, out_trans_hids, in_sent_lens, out_trans_lens, bsz, max_len)
 
             # compute copy attn by scattering attn into vocab space
             vocab_scores = Variable(torch.zeros(bsz, self.len_voc).cuda())
@@ -243,14 +268,19 @@ class SCPN(nn.Module):
         copy_probs = copy_probs.view(-1)
         final_dists = copy_probs[:, None] * decoder_copy_dists + \
             (1. - copy_probs[:, None]) * decoder_preds
-        return final_dists
 
+        if self.coverage:
+            return final_dists, coverages, attentions
+        else:
+            return final_dists
 
     # beam search given a single input / transformation
     def beam_search(self, inputs, in_trans, out_trans, in_sent_lens, in_trans_lens,
         out_trans_lens, eos_idx, beam_size=4, max_steps=40):
 
         bsz, max_len = inputs.size()
+
+        cov_previous = Variable(torch.zeros(bsz, max_len).cuda())
 
         # chop input
         inputs = inputs[:, :in_sent_lens[0]]
@@ -295,8 +325,14 @@ class SCPN(nn.Module):
                     prev_word = None
 
                 # concat prev word emb and prev attn input and feed to decoder lstm
-                hn, cn, attn_weights, attn_ctx, p_copy = self.decode_step(len(seq), prev_word, 
-                    prev_h, prev_c, enc_hids, out_trans_hids, in_sent_lens, out_trans_lens, bsz, max_len)
+                if self.coverage:
+                    hn, cn, attn_weights, attn_ctx, p_copy = self.decode_step(len(seq), prev_word,
+                        prev_h, prev_c, enc_hids, out_trans_hids, in_sent_lens, out_trans_lens, bsz,
+                        max_len, cov_previous)
+                    cov_previous = cov_previous + attn_weights
+                else:
+                    hn, cn, attn_weights, attn_ctx, p_copy = self.decode_step(len(seq), prev_word,
+                        prev_h, prev_c, enc_hids, out_trans_hids, in_sent_lens, out_trans_lens, bsz, max_len)
 
                 # compute copy attn by scattering attn into vocab space
                 vocab_scores = Variable(torch.zeros(bsz, self.len_voc).cuda())
@@ -329,12 +365,13 @@ class SCPN(nn.Module):
 
         return beams
 
-
     # beam search given a single sentence and a batch of transformations
     def batch_beam_search(self, inputs, out_trans, in_sent_lens,
         out_trans_lens, eos_idx, beam_size=5, max_steps=70):
 
         bsz, max_len = inputs.size()
+
+        cov_previous = Variable(torch.zeros(bsz, max_len).cuda())
 
         # chop input
         inputs = inputs[:, :in_sent_lens[0]]
@@ -409,8 +446,14 @@ class SCPN(nn.Module):
             curr_inputs = inputs.expand(num_examples, in_sent_lens[0])
 
             # concat prev word emb and prev attn input and feed to decoder lstm
-            hn, cn, attn_weights, attn_ctx, p_copy = self.decode_step(nsteps, prev_words, 
-                hs, cs, curr_enc_hids, curr_out, curr_enc_lens, curr_out_lens, num_examples, max_len)
+            if self.coverage:
+                hn, cn, attn_weights, attn_ctx, p_copy = self.decode_step(nsteps, prev_words,
+                    hs, cs, curr_enc_hids, curr_out, curr_enc_lens, curr_out_lens, num_examples,
+                    max_len, cov_previous)
+                cov_previous = cov_previous + attn_weights
+            else:
+                hn, cn, attn_weights, attn_ctx, p_copy = self.decode_step(nsteps, prev_words,
+                    hs, cs, curr_enc_hids, curr_out, curr_enc_lens, curr_out_lens, num_examples, max_len)
 
             # compute copy attn by scattering attn into vocab space
             vocab_scores = Variable(torch.zeros(num_examples, self.len_voc).cuda())
@@ -488,7 +531,7 @@ if __name__ == '__main__':
             help='word vocabulary')
     parser.add_argument('--parse_vocab', type=str, default='/home/zhengliz/Output/scpn/data/ptb_tagset.txt',
             help='tag vocabulary')
-    parser.add_argument('--model', type=str, default='/home/zhengliz/Output/scpn/models/scpn2.pt',
+    parser.add_argument('--model', type=str, default='/home/zhengliz/Output/scpn/models/scpn_coverage.pt',
             help='model save path')
     parser.add_argument('--batch_size', type=int, default=64,
             help='batch size')
@@ -530,7 +573,7 @@ if __name__ == '__main__':
             help='whether or not to use the input parse')
     parser.add_argument('--dev_batches', type=int, default=200,
             help='how many minibatches to use for validation')
-    parser.add_argument('--coverage', type=bool, default=False,
+    parser.add_argument('--coverage', action='store_true',
                         help='whether to use coverage mechanism')
     parser.add_argument('--cov_loss_wt', type=float, default=1.0,
                         help='weight of coverage loss (lambda in the paper)')
@@ -674,8 +717,12 @@ if __name__ == '__main__':
             out_trans_lens = torch.from_numpy(out_trans_len_np).long().cuda()
 
             # forward prop
-            preds = net(curr_inp, curr_out, in_trans, out_trans, 
-                in_sent_lens, out_sent_lens, in_trans_lens, out_trans_lens, max_out_len)
+            if args.coverage:
+                preds, coverages, attentions = net(curr_inp, curr_out, in_trans, out_trans,
+                    in_sent_lens, out_sent_lens, in_trans_lens, out_trans_lens, max_out_len)
+            else:
+                preds = net(curr_inp, curr_out, in_trans, out_trans,
+                    in_sent_lens, out_sent_lens, in_trans_lens, out_trans_lens, max_out_len)
 
             num_batches += 1
 
@@ -684,6 +731,11 @@ if __name__ == '__main__':
                 
                 # compute masked loss
                 loss = criterion(preds, curr_out.view(-1))
+                if args.coverage:
+                    cov_loss = 0
+                    for _att, _cov in zip(attentions, coverages):
+                        cov_loss = cov_loss + torch.sum(torch.min(_att, _cov))
+                    loss = loss + args.cov_loss_wt * cov_loss
                 ep_loss += loss.data[0]
 
                 optimizer.zero_grad()
